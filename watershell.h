@@ -1,3 +1,19 @@
+/*
+ * =====================================================================================
+ *
+ *       Filename:  ws.h
+ *
+ *    Description:  structs and prototypes for watershell
+ *
+ *        Version:  1.0
+ *        Created:  07/02/2015 21:19:57
+ *       Revision:  none
+ *       Compiler:  gcc
+ *
+ *         Author:  Jaime Geiger (@jgeigerm), jmg2967@rit.edu
+ *
+ * =====================================================================================
+ */
 #ifndef WATERSHELL_H_
 #define WATERSHELL_H_
 /* BPF code generated with tcpdump -dd udp and port 12345
