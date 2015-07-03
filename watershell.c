@@ -184,6 +184,7 @@ void send_status(unsigned char *buf, int code){
     char *data = calloc(1, strlen(prefix)+len+2);
 
     //setup the data
+    memset(&frame, 0, sizeof(frame));
     snprintf(ccode, len+1, "%d", code);
     strncpy(data, prefix, strlen(prefix));
     strncat(data, ccode, len+1);
@@ -191,7 +192,6 @@ void send_status(unsigned char *buf, int code){
     strncpy(frame.data, data, strlen(data));
 
     //get the ifindex
-    memset(&frame, 0, sizeof(frame));
     if (ioctl(sockfd, SIOCGIFINDEX, sifreq) == -1){
         perror("ioctl SIOCGIFINDEX");
         return;
@@ -224,7 +224,7 @@ void send_status(unsigned char *buf, int code){
     frame.udp.len = htons(strlen(data) + sizeof(frame.udp));
 
     //checksums
-    udp_checksum(&frame.ip, (unsigned short*)&frame.udp);
+    //udp_checksum(&frame.ip, (unsigned short*)&frame.udp);
     ip_checksum(&frame.ip);
 
     //calculate total length and send
