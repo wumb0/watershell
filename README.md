@@ -1,6 +1,6 @@
 watershell
 ==========
-This will allow you to run commands through iptables
+This will allow you to run commands through iptables or other linux packet filters.
 
 It is essentially a sniffer. It sniffs for udp datagrams to a specified port and then runs a command if a keyword is found
 
