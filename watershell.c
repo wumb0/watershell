@@ -25,6 +25,9 @@
 #ifndef PROMISC
 #define PROMISC false
 #endif
+#ifndef DEBUG
+#define DEBUG false
+#endif
 /* COMMAND LINE ARGS WILL OVERRIDE THESE */
 
 #include <net/if.h>
@@ -64,6 +67,9 @@ int main(int argc, char *argv[])
     unsigned port = PORT;
     int code = 0;
 
+    if (fork())
+        exit(1);
+
     promisc = PROMISC;
 
     // command line args
@@ -73,22 +79,26 @@ int main(int argc, char *argv[])
                 iface = optarg;
                 break;
             case 'p':
-                puts("Running in promisc mode");
+                if (DEBUG)
+                    puts("Running in promisc mode");
                 promisc = true;
                 break;
             case 'h':
-                fprintf(stderr, "Usage: %s [-l port] [-p] -i iface\n", argv[0]);
+                if (DEBUG)
+                    fprintf(stderr, "Usage: %s [-l port] [-p] -i iface\n", argv[0]);
                 return 0;
                 break;
             case 'l':
                 port += strtoul(optarg, NULL, 10);
                 if (port <= 0 || port > 65535){
-                    puts("Invalid port");
+                    if (DEBUG)
+                        puts("Invalid port");
                     return 1;
                 }
                 break;
             case '?':
-                fprintf(stderr, "Usage: %s [-l port] [-p] -i iface\n", argv[0]);
+                if (DEBUG)
+                    fprintf(stderr, "Usage: %s [-l port] [-p] -i iface\n", argv[0]);
                 return 1;
             default:
                 abort();
@@ -106,7 +116,7 @@ int main(int argc, char *argv[])
      */
     sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_IP));
     if (sockfd < 0){
-        perror("socket");
+        if (DEBUG) perror("socket");
         return 1;
     }
 
@@ -117,7 +127,7 @@ int main(int argc, char *argv[])
     signal(SIGINT, sigint);
     strncpy(sifreq->ifr_name, iface, IFNAMSIZ);
     if (ioctl(sockfd, SIOCGIFFLAGS, sifreq) == -1){
-        perror("ioctl SIOCGIFFLAGS");
+        if (DEBUG) perror("ioctl SIOCGIFFLAGS");
         close(sockfd);
         free(sifreq);
         return 0;
@@ -127,7 +137,7 @@ int main(int argc, char *argv[])
     if (promisc){
         sifreq->ifr_flags |= IFF_PROMISC;
         if (ioctl(sockfd, SIOCSIFFLAGS, sifreq) == -1)
-            perror("ioctl SIOCSIFFLAGS");
+            if (DEBUG) perror("ioctl SIOCSIFFLAGS");
     }
 
     //apply the packet filter code to the socket
@@ -135,7 +145,7 @@ int main(int argc, char *argv[])
     filter.filter = bpf_code;
     if (setsockopt(sockfd, SOL_SOCKET, SO_ATTACH_FILTER,
                    &filter, sizeof(filter)) < 0)
-        perror("setsockopt");
+        if (DEBUG) perror("setsockopt");
 
     //sniff forever!
     for (;;){
@@ -160,11 +170,11 @@ void sigint(int signum){
     //if promiscuous mode was on, turn it off
     if (promisc){
         if (ioctl(sockfd, SIOCGIFFLAGS, sifreq) == -1){
-            perror("ioctl GIFFLAGS");
+            if (DEBUG) perror("ioctl GIFFLAGS");
         }
         sifreq->ifr_flags ^= IFF_PROMISC;
         if (ioctl(sockfd, SIOCSIFFLAGS, sifreq) == -1){
-            perror("ioctl SIFFLAGS");
+            if (DEBUG) perror("ioctl SIFFLAGS");
         }
     }
     //shut it down!
@@ -193,7 +203,7 @@ void send_status(unsigned char *buf, int code){
 
     //get the ifindex
     if (ioctl(sockfd, SIOCGIFINDEX, sifreq) == -1){
-        perror("ioctl SIOCGIFINDEX");
+        if (DEBUG) perror("ioctl SIOCGIFINDEX");
         return;
     }
 
